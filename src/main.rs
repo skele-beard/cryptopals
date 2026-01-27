@@ -1,7 +1,8 @@
-mod challenge;
-use challenge::Challenge;
+mod set1;
+mod utils;
+use crate::set1::Challenges;
 
 fn main() {
-    let challenge = Challenge::new();
+    let challenge = Challenges::new();
     challenge.set_one();
 }
