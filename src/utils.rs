@@ -1,4 +1,5 @@
 use base64::{Engine as _, engine::general_purpose};
+use openssl::symm::{Cipher, Crypter, Mode, decrypt, encrypt};
 use std::collections::HashMap;
 
 const CHAR_OFFSET: u8 = 97;
@@ -168,4 +169,76 @@ pub fn calculate_hamming_distance(buf1: &[u8], buf2: &[u8]) -> u32 {
         .collect();
     let hamming_distance = xor_string.iter().map(|&byte| byte.count_ones()).sum();
     hamming_distance
+}
+
+pub fn add_pkcs7_padding(bytes: &[u8], block_length: u8) -> Vec<u8> {
+    //let padding_value = block_length as usize % bytes.len(); trying something different
+    let padding_value = block_length - (bytes.len() % block_length as usize) as u8;
+    let mut padded_bytes = bytes.to_vec();
+    for i in 0..padding_value {
+        padded_bytes.push(padding_value);
+    }
+    println!("length: {}", padded_bytes.len());
+    padded_bytes
+}
+
+pub fn encrypt_cbc_mode(bytes: &[u8], key: &[u8], iv: &[u8], block_length: u8) -> Vec<u8> {
+    let bytes = add_pkcs7_padding(bytes, block_length);
+    let mut encrypted_data = Vec::new();
+    let cipher = Cipher::aes_128_ecb();
+    let mut prev_block = None;
+    let mut temp_data = Vec::new();
+    for block in bytes.chunks(16) {
+        println!("block: {:?}", block);
+        match prev_block {
+            None => {
+                temp_data = xor_buffers(block, iv);
+            }
+            Some(prev_block) => {
+                temp_data = xor_buffers(block, prev_block);
+            }
+        }
+        encrypted_data.append(&mut encrypt(cipher, key, None, &temp_data).unwrap());
+        prev_block = Some(block);
+    }
+    encrypted_data
+}
+
+/*pub fn decrypt_cbc_mode(bytes: &[u8], key: &[u8], iv: &[u8]) -> Vec<u8> {
+    let mut plaintext = Vec::new();
+    let cipher = Cipher::aes_128_ecb();
+    let prev_block = None;
+    let mut temp_data = Vec::new();
+    for block in bytes.chunks(16) {
+        temp_data = decrypt(cipher, key, None, block).unwrap();
+        match prev_block {
+            None => {
+                plaintext.append(&mut xor_buffers(&temp_data, iv));
+            }
+            Some(prev_block) => {
+                plaintext.append(&mut xor_buffers(&temp_data, prev_block));
+            }
+        }
+    }
+    plaintext
+}*/
+pub fn decrypt_cbc_mode(bytes: &[u8], key: &[u8], iv: &[u8]) -> Vec<u8> {
+    let mut plaintext = Vec::new();
+    let mut cipher = Crypter::new(Cipher::aes_128_ecb(), Mode::Decrypt, key, None).unwrap();
+    cipher.pad(false);
+    let mut prev_block = None;
+    let mut temp_data = vec![0; 32];
+    for block in bytes.chunks(16) {
+        cipher.update(block, &mut temp_data).unwrap();
+        match prev_block {
+            None => {
+                plaintext.append(&mut xor_buffers(&temp_data, iv));
+            }
+            Some(prev_block) => {
+                plaintext.append(&mut xor_buffers(&temp_data, prev_block));
+            }
+        }
+        prev_block = Some(block);
+    }
+    plaintext
 }

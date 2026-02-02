@@ -98,8 +98,7 @@ I go crazy when I hear a cymbal"
         for line in data.lines() {
             let bytes = from_hex_to_u8(line);
             let mut table = HashSet::new();
-            for i in 1..10 {
-                let block = &bytes[i * 16..i * 16 + 16];
+            for block in bytes.chunks(16) {
                 match table.get(&block) {
                     Some(_) => {
                         println!("The answer to challenge eight is {}", line);
