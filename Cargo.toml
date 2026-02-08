@@ -4,6 +4,7 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
+aes = "0.8.4"
 base64 = "0.22.1"
 hex = "0.4.3"
 openssl = "0.10.75"

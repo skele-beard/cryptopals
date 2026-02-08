@@ -1,6 +1,11 @@
+use aes::cipher::KeyInit;
+use aes::cipher::{BlockDecrypt, BlockEncrypt};
+use aes::{Aes128, cipher::generic_array::GenericArray};
 use base64::{Engine as _, engine::general_purpose};
-use openssl::symm::{Cipher, Crypter, Mode, decrypt, encrypt};
+use openssl::rand;
+use openssl::symm::{Cipher, encrypt};
 use std::collections::HashMap;
+use std::collections::HashSet;
 
 const CHAR_OFFSET: u8 = 97;
 const NONASCII_PENALTY: f32 = 0.5;
@@ -12,6 +17,12 @@ const LETTER_FREQUENCIES: [f32; 26] = [
     0.067, 0.075, 0.019, 0.00095, 0.06, 0.063, 0.091, 0.028, 0.0098, 0.024, 0.015, 0.02, 0.00074,
 ];
 const ATTEMPTED_KEY_LENGTHS: usize = 40;
+const BLOCK_LENGTH: usize = 16;
+
+pub enum AESMode {
+    ECB,
+    CBC,
+}
 
 // utility functions
 pub fn from_hex_to_b64(hex_str: &str) -> String {
@@ -171,65 +182,61 @@ pub fn calculate_hamming_distance(buf1: &[u8], buf2: &[u8]) -> u32 {
     hamming_distance
 }
 
-pub fn add_pkcs7_padding(bytes: &[u8], block_length: u8) -> Vec<u8> {
-    //let padding_value = block_length as usize % bytes.len(); trying something different
-    let padding_value = block_length - (bytes.len() % block_length as usize) as u8;
+pub fn add_pkcs7_padding(bytes: &[u8], block_length: usize) -> Vec<u8> {
+    let padding_value = (block_length - (bytes.len() % block_length)) as u8;
     let mut padded_bytes = bytes.to_vec();
     for i in 0..padding_value {
         padded_bytes.push(padding_value);
     }
-    println!("length: {}", padded_bytes.len());
     padded_bytes
 }
 
-pub fn encrypt_cbc_mode(bytes: &[u8], key: &[u8], iv: &[u8], block_length: u8) -> Vec<u8> {
-    let bytes = add_pkcs7_padding(bytes, block_length);
+pub fn remove_pkcs7_padding(bytes: &[u8], block_length: usize) -> Vec<u8> {
+    let length = bytes.len();
+    let start_of_last_block = length - block_length;
+    let last_byte = length - 1;
+    let last_block = &bytes[start_of_last_block..=last_byte];
+    let padding_value = *last_block.last().unwrap();
+    let mut unpadded_bytes = Vec::from(&bytes[0..start_of_last_block]);
+    for &byte in last_block {
+        if byte != padding_value {
+            unpadded_bytes.push(byte);
+        }
+    }
+    unpadded_bytes
+}
+
+pub fn encrypt_cbc_mode(bytes: &[u8], key: &[u8], iv: &[u8]) -> Vec<u8> {
+    let bytes = add_pkcs7_padding(bytes, BLOCK_LENGTH);
     let mut encrypted_data = Vec::new();
-    let cipher = Cipher::aes_128_ecb();
+    let key = GenericArray::from_slice(key);
+    let cipher = Aes128::new(key);
     let mut prev_block = None;
-    let mut temp_data = Vec::new();
+    let mut temp_data = GenericArray::from([0u8; 16]);
     for block in bytes.chunks(16) {
-        println!("block: {:?}", block);
         match prev_block {
             None => {
-                temp_data = xor_buffers(block, iv);
+                temp_data = *GenericArray::from_slice(xor_buffers(block, iv).as_slice());
             }
             Some(prev_block) => {
-                temp_data = xor_buffers(block, prev_block);
+                temp_data = *GenericArray::from_slice(xor_buffers(block, prev_block).as_slice());
             }
         }
-        encrypted_data.append(&mut encrypt(cipher, key, None, &temp_data).unwrap());
-        prev_block = Some(block);
+        cipher.encrypt_block(&mut temp_data);
+        prev_block = Some(temp_data.as_slice());
+        encrypted_data.extend_from_slice(temp_data.as_slice());
     }
     encrypted_data
 }
 
-/*pub fn decrypt_cbc_mode(bytes: &[u8], key: &[u8], iv: &[u8]) -> Vec<u8> {
-    let mut plaintext = Vec::new();
-    let cipher = Cipher::aes_128_ecb();
-    let prev_block = None;
-    let mut temp_data = Vec::new();
-    for block in bytes.chunks(16) {
-        temp_data = decrypt(cipher, key, None, block).unwrap();
-        match prev_block {
-            None => {
-                plaintext.append(&mut xor_buffers(&temp_data, iv));
-            }
-            Some(prev_block) => {
-                plaintext.append(&mut xor_buffers(&temp_data, prev_block));
-            }
-        }
-    }
-    plaintext
-}*/
 pub fn decrypt_cbc_mode(bytes: &[u8], key: &[u8], iv: &[u8]) -> Vec<u8> {
     let mut plaintext = Vec::new();
-    let mut cipher = Crypter::new(Cipher::aes_128_ecb(), Mode::Decrypt, key, None).unwrap();
-    cipher.pad(false);
+    let key = GenericArray::from_slice(key);
+    let cipher = Aes128::new(key);
     let mut prev_block = None;
-    let mut temp_data = vec![0; 32];
+    let mut temp_data = GenericArray::clone_from_slice(&[0; 16]);
     for block in bytes.chunks(16) {
-        cipher.update(block, &mut temp_data).unwrap();
+        cipher.decrypt_block_b2b(&GenericArray::clone_from_slice(block), &mut temp_data);
         match prev_block {
             None => {
                 plaintext.append(&mut xor_buffers(&temp_data, iv));
@@ -240,5 +247,93 @@ pub fn decrypt_cbc_mode(bytes: &[u8], key: &[u8], iv: &[u8]) -> Vec<u8> {
         }
         prev_block = Some(block);
     }
+    plaintext = remove_pkcs7_padding(plaintext.as_slice(), BLOCK_LENGTH);
     plaintext
+}
+
+pub fn generate_sixteen_random_bytes() -> [u8; 16] {
+    let mut buf = [0; 16];
+    rand::rand_bytes(&mut buf).unwrap();
+    buf
+}
+
+pub fn encryption_oracle(bytes: &[u8]) -> Vec<u8> {
+    let mut ciphertext = Vec::new();
+    let mut plaintext = Vec::new();
+    let key = generate_sixteen_random_bytes();
+    let decision_number = key[0];
+
+    //insert padding
+    let appending_count = (decision_number % 6) + 5; // this guarantees between 5 and 10
+    let appending_content = vec![0u8; appending_count as usize];
+    plaintext.extend_from_slice(&appending_content);
+    plaintext.extend_from_slice(bytes);
+    plaintext.extend_from_slice(&appending_content);
+
+    //if first byte of key is even then do ECB, if it's odd do CBC
+    if decision_number % 2 == 0 {
+        //encrypt via ecb
+        println!("chose ECB Mode!");
+        let cipher = Cipher::aes_128_ecb();
+        let mut encrypted_data = encrypt(cipher, &key, None, bytes).unwrap();
+        ciphertext.append(&mut encrypted_data);
+    } else {
+        println!("chose CBC Mode!");
+        let iv = generate_sixteen_random_bytes();
+        ciphertext = encrypt_cbc_mode(bytes, &key, &iv)
+    }
+
+    ciphertext
+}
+
+pub fn detect_aes_mode(bytes: &[u8]) -> AESMode {
+    let mut table = HashSet::new();
+    for block in bytes.chunks(16) {
+        match table.get(&block) {
+            Some(_) => {
+                return AESMode::ECB;
+            }
+            None => {
+                table.insert(block);
+            }
+        }
+    }
+    AESMode::CBC
+}
+
+pub fn challenge_twelve_helper(bytes: &[u8]) -> Vec<u8> {
+    let key = b"bat wings sing t";
+    let cipher = Cipher::aes_128_ecb();
+    let encoded_string = "Um9sbGluJyBpbiBteSA1LjAKV2l0aCBteSByYWctdG9wIGRvd24gc28gbXkgaGFpciBjYW4gYmxvdwpUaGUgZ2lybGllcyBvbiBzdGFuZGJ5IHdhdmluZyBqdXN0IHRvIHNheSBoaQpEaWQgeW91IHN0b3A/IE5vLCBJIGp1c3QgZHJvdmUgYnkK";
+    let string_to_append = from_b64_to_u8(encoded_string);
+    let mut plaintext = Vec::new();
+
+    let decision_number = generate_sixteen_random_bytes()[0];
+    //insert padding
+    let appending_count = (decision_number % 6) + 5; // this guarantees between 5 and 10
+    let appending_content = vec![0u8; appending_count as usize];
+    plaintext.extend_from_slice(&appending_content);
+    plaintext.extend_from_slice(bytes);
+    plaintext.extend_from_slice(&appending_content);
+    plaintext.extend_from_slice(bytes);
+    plaintext.extend_from_slice(string_to_append.as_slice());
+
+    let ciphertext = encrypt(cipher, key, None, plaintext.as_slice()).unwrap();
+    ciphertext
+}
+
+pub fn byte_at_a_time_ecb_decryption() {
+    let byte = b'A';
+    let mut block_size = 0;
+    let mut ciphertext = Vec::new();
+    while block_size < 100 {
+        let bytes = vec![byte; block_size];
+        ciphertext = challenge_twelve_helper(&bytes);
+        let mode = detect_aes_mode(ciphertext.as_slice());
+        if let AESMode::ECB = mode {
+            block_size /= 2; // since we found a repeat we need to halve the block size
+            break;
+        }
+        block_size += 1;
+    }
 }
