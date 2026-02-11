@@ -6,6 +6,7 @@ use openssl::rand;
 use openssl::symm::{Cipher, encrypt};
 use std::collections::HashMap;
 use std::collections::HashSet;
+use std::thread::current;
 
 const CHAR_OFFSET: u8 = 97;
 const NONASCII_PENALTY: f32 = 0.5;
@@ -308,32 +309,74 @@ pub fn challenge_twelve_helper(bytes: &[u8]) -> Vec<u8> {
     let string_to_append = from_b64_to_u8(encoded_string);
     let mut plaintext = Vec::new();
 
-    let decision_number = generate_sixteen_random_bytes()[0];
     //insert padding
-    let appending_count = (decision_number % 6) + 5; // this guarantees between 5 and 10
-    let appending_content = vec![0u8; appending_count as usize];
-    plaintext.extend_from_slice(&appending_content);
-    plaintext.extend_from_slice(bytes);
-    plaintext.extend_from_slice(&appending_content);
     plaintext.extend_from_slice(bytes);
     plaintext.extend_from_slice(string_to_append.as_slice());
 
-    let ciphertext = encrypt(cipher, key, None, plaintext.as_slice()).unwrap();
-    ciphertext
+    encrypt(cipher, key, None, plaintext.as_slice()).unwrap()
 }
 
-pub fn byte_at_a_time_ecb_decryption() {
+pub fn discover_ecb_block_size() -> usize {
     let byte = b'A';
     let mut block_size = 0;
     let mut ciphertext = Vec::new();
     while block_size < 100 {
         let bytes = vec![byte; block_size];
         ciphertext = challenge_twelve_helper(&bytes);
-        let mode = detect_aes_mode(ciphertext.as_slice());
+        let mode = detect_aes_mode(&ciphertext);
         if let AESMode::ECB = mode {
             block_size /= 2; // since we found a repeat we need to halve the block size
             break;
         }
         block_size += 1;
     }
+    block_size
+}
+
+// This function is designed to find a hidden string concatenated with a known string before ECB
+// encryption. Essentially, given AESECB( your_input | hidden_string ) and the knowledge that there
+// is a consistent key, find the next byte of hidden string.
+pub fn decrypt_ecb_one_byte(known_bytes: &[u8], block_size: usize) -> Option<u8> {
+    let mut table = HashSet::new();
+    let mut decrypted_byte = None;
+    let num_bytes_to_input = block_size - (known_bytes.len() % block_size) - 1;
+    let block_number = known_bytes.len() / block_size + 1;
+    let mut input_bytes = vec![0u8; num_bytes_to_input];
+
+    let mut encrypted = challenge_twelve_helper(&input_bytes);
+    encrypted.truncate(block_size * block_number);
+    encrypted.drain(0..(encrypted.len() - block_size));
+    table.insert(encrypted);
+
+    input_bytes.extend_from_slice(known_bytes);
+
+    for byte in 0..=255 {
+        input_bytes.push(byte);
+        encrypted = challenge_twelve_helper(&input_bytes);
+        encrypted.truncate(block_size * block_number);
+        encrypted.drain(0..(encrypted.len() - block_size));
+
+        match table.get(&encrypted) {
+            Some(_) => {
+                decrypted_byte = Some(byte);
+                break;
+            }
+            None => table.insert(encrypted),
+        };
+        input_bytes.pop();
+    }
+    decrypted_byte
+}
+
+pub fn brute_force_ecb_mode() -> Vec<u8> {
+    let mut hidden_string = Vec::new();
+    let block_size = discover_ecb_block_size();
+    loop {
+        let new_byte = decrypt_ecb_one_byte(&hidden_string, block_size);
+        match new_byte {
+            Some(byte) => hidden_string.push(byte),
+            None => break,
+        }
+    }
+    hidden_string
 }

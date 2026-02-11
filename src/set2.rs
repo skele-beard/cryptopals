@@ -1,6 +1,6 @@
 use crate::utils::{
-    AESMode, add_pkcs7_padding, byte_at_a_time_ecb_decryption, decrypt_cbc_mode, detect_aes_mode,
-    encrypt_cbc_mode, encryption_oracle, from_b64_to_u8,
+    AESMode, add_pkcs7_padding, brute_force_ecb_mode, decrypt_cbc_mode, detect_aes_mode,
+    encryption_oracle, from_b64_to_u8,
 };
 
 #[allow(dead_code)]
@@ -51,6 +51,10 @@ impl Challenges {
     }
 
     pub fn challenge_twelve(&self) {
-        byte_at_a_time_ecb_decryption();
+        let hidden_string = brute_force_ecb_mode();
+        println!(
+            "The string is: {}",
+            String::from_utf8(hidden_string).unwrap()
+        )
     }
 }
