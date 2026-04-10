@@ -538,3 +538,36 @@ pub fn brute_force_ecb_mode_harder() -> Vec<u8> {
     }
     hidden_string
 }
+
+pub fn strip_padding(bytes: &[u8]) -> Result<&[u8], String> {
+    if bytes.is_empty() {
+        return Err(String::from("Bytes are empty."));
+    }
+    if bytes.len() < 16 {
+        return Err(String::from("Bytes do not create a full block"));
+    }
+    let padding_byte = bytes[bytes.len() - 1];
+    if padding_byte == 0 || padding_byte > 16 {
+        return Err(String::from("Invalid Padding"));
+    }
+    for i in 0..padding_byte {
+        if bytes[bytes.len() - 1 - i as usize] != padding_byte {
+            return Err(String::from("Invalid padding"));
+        }
+    }
+    Ok(&bytes[0..bytes.len() - padding_byte as usize])
+}
+
+pub fn challenge_16_string(input: &str, key: &[u8], iv: &[u8]) -> Vec<u8> {
+    let sanitized_input = input.replace(';', "%3B").replace('=', "%3D");
+    let mut constructed_string = String::from("comment1=cooking%20MCs;userdata=");
+    constructed_string.push_str(&sanitized_input);
+    constructed_string.push_str(";comment2=%20like%20a%20pound%20of%20bacon");
+    encrypt_cbc_mode(constructed_string.as_bytes(), key, iv)
+}
+
+pub fn challenge_16_authenticate_admin(bytes: &[u8], key: &[u8], iv: &[u8]) -> bool {
+    let plaintext = decrypt_cbc_mode(bytes, key, iv);
+    let string = String::from_utf8_lossy(&plaintext);
+    string.contains(";admin=true;")
+}

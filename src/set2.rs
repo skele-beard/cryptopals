@@ -1,7 +1,8 @@
 use crate::utils::{
     AESMode, add_pkcs7_padding, brute_force_ecb_mode, brute_force_ecb_mode_harder,
-    decrypt_cbc_mode, decrypt_user_profile, detect_aes_mode, encrypt_user_profile,
-    encryption_oracle, from_b64_to_u8, generate_sixteen_random_bytes, profile_for,
+    challenge_16_authenticate_admin, challenge_16_string, decrypt_cbc_mode, decrypt_user_profile,
+    detect_aes_mode, encrypt_user_profile, encryption_oracle, from_b64_to_u8,
+    generate_sixteen_random_bytes, profile_for,
 };
 
 pub fn set_two() {
@@ -10,7 +11,8 @@ pub fn set_two() {
     challenge_eleven();
     challenge_twelve();
     challenge_thirteen();
-    challenge_fourteen();
+    //challenge_fourteen();
+    challenge_sixteen();
 }
 
 fn challenge_nine() {
@@ -82,4 +84,20 @@ pub fn challenge_fourteen() {
         "The string is: {}",
         String::from_utf8(hidden_string).unwrap()
     )
+}
+
+pub fn challenge_sixteen() {
+    let input = "YELLOW_SUBMARINE:admin<true";
+    let key = generate_sixteen_random_bytes();
+    let iv = generate_sixteen_random_bytes();
+    let mut ciphertext = challenge_16_string(input, &key, &iv);
+    // We need to flip a particular set of bits to get what we want
+    ciphertext[32] ^= 0x01;
+    ciphertext[38] ^= 0x01;
+    let is_admin = challenge_16_authenticate_admin(&ciphertext, &key, &iv);
+    if is_admin {
+        println!("Successfully forged.");
+    } else {
+        println!("Failed to forge admin creds.");
+    }
 }
