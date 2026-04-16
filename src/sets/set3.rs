@@ -1,14 +1,16 @@
-use crate::utils::from_b64_to_u8;
+use crate::utils::{break_repeating_key_xor_known_key_len, from_b64_to_u8};
 use crate::utils::{
     encrypt_cbc_mode, encrypt_ecb_mode, generate_sixteen_random_bytes, strip_padding, xor_buffers,
 };
 use aes::cipher::BlockDecrypt;
 use aes::cipher::KeyInit;
 use aes::{Aes128, cipher::generic_array::GenericArray};
+use std::fs;
 
 pub fn run_all() {
     challenge_seventeen();
     challenge_eighteen();
+    challenge_twenty();
 }
 
 pub fn challenge_seventeen_create_cookie(key: &[u8], iv: &[u8]) -> Vec<u8> {
@@ -132,8 +134,8 @@ pub fn encrypt_ctr_mode(bytes: &[u8], key: &[u8], nonce: u64) -> Vec<u8> {
             ciphertext.extend_from_slice(&xor_buffers(keystream, block));
         } else {
             counter[8..].copy_from_slice(&num_blocks.to_le_bytes());
-            let keystream = encrypt_ecb_mode(&counter, key);
-            ciphertext.extend_from_slice(&xor_buffers(&keystream, block));
+            let keystream = &encrypt_ecb_mode(&counter, key)[0..16];
+            ciphertext.extend_from_slice(&xor_buffers(keystream, block));
         }
     }
     ciphertext
@@ -166,4 +168,35 @@ pub fn challenge_eighteen() {
         "Plaintext: {}",
         String::from_utf8_lossy(&decrypt_ctr_mode(&bytes, key, nonce))
     );
+}
+
+pub fn challenge_nineteen() {
+    println!(
+        "Challenge 19 does not seem more intuitive than challenge 20 and seems slower as well. I will skip it."
+    );
+}
+
+pub fn challenge_twenty() {
+    // get data
+    let data = fs::read_to_string("challenge-data/challenge-data20.txt").unwrap();
+    let plaintexts: Vec<&str> = data.split('\n').filter(|s| !s.is_empty()).collect();
+    let bytes: Vec<Vec<u8>> = plaintexts.into_iter().map(from_b64_to_u8).collect();
+    let key = &generate_sixteen_random_bytes();
+    let nonce = 0;
+    let ciphertexts: Vec<Vec<u8>> = bytes
+        .iter()
+        .map(|b| encrypt_ctr_mode(b, key, nonce))
+        .collect();
+    let key_len = ciphertexts.iter().map(|v| v.len()).min().unwrap_or(1);
+    let concatenated_ciphertexts: Vec<u8> = ciphertexts
+        .iter()
+        .flat_map(|b| b[0..key_len].to_vec())
+        .collect();
+    println!(
+        "Attempted plaintext: {}",
+        String::from_utf8_lossy(&break_repeating_key_xor_known_key_len(
+            &concatenated_ciphertexts,
+            key_len
+        ))
+    )
 }

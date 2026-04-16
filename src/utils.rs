@@ -172,6 +172,21 @@ pub fn break_repeating_key_xor(bytes: &[u8]) -> Vec<u8> {
     plaintext
 }
 
+pub fn break_repeating_key_xor_known_key_len(bytes: &[u8], key_len: usize) -> Vec<u8> {
+    let mut key = Vec::new();
+    for i in 0..key_len {
+        let mut transposed_blocks = Vec::new();
+        for (idx, &byte) in bytes.iter().enumerate() {
+            if idx % key_len == i {
+                transposed_blocks.push(byte);
+            }
+        }
+        let key_byte = find_key_single_byte_xor_cipher(&transposed_blocks);
+        key.push(key_byte);
+    }
+    apply_repeating_key_xor(bytes, &key)
+}
+
 pub fn calculate_hamming_distance(buf1: &[u8], buf2: &[u8]) -> u32 {
     let xor_string: Vec<u8> = buf1
         .iter()
@@ -343,7 +358,6 @@ pub fn profile_for(email: &str) -> String {
     let mut profile_encoding = String::from("email=");
     profile_encoding.push_str(email);
     profile_encoding.push_str("&uid=10&role=user");
-    //println!("{}", profile_encoding)
     profile_encoding
 }
 
