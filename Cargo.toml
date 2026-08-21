@@ -9,3 +9,4 @@ base64 = "0.22.1"
 clap = { version = "4", features = ["derive"] }
 hex = "0.4.3"
 openssl = "0.10.75"
+rand = "0.10.2"

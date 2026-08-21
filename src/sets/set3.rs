@@ -5,12 +5,19 @@ use crate::utils::{
 use aes::cipher::BlockDecrypt;
 use aes::cipher::KeyInit;
 use aes::{Aes128, cipher::generic_array::GenericArray};
-use std::fs;
+use rand;
+use std::thread;
+use std::time::SystemTime;
+use std::time::{Duration, UNIX_EPOCH};
+use std::{fs, time};
 
 pub fn run_all() {
     challenge_seventeen();
     challenge_eighteen();
     challenge_twenty();
+    challenge_twentyone();
+    challenge_twentytwo();
+    challenge_twentythree();
 }
 
 pub fn challenge_seventeen_create_cookie(key: &[u8], iv: &[u8]) -> Vec<u8> {
@@ -199,4 +206,159 @@ pub fn challenge_twenty() {
             key_len
         ))
     )
+}
+
+/*
+  The general algorithm is characterized by the following quantities:
+
+    w : word size (in number of bits)
+    n : degree of recurrence
+    m : middle word, an offset used in the recurrence relation defining the series x {\displaystyle x}, 1 ≤ m < n {\displaystyle 1\leq m<n}
+    r : separation point of one word, or the number of bits of the lower bitmask, 0 ≤ r ≤ w − 1 {\displaystyle 0\leq r\leq w-1}
+    a : coefficients of the rational normal form twist matrix
+    b , c : TGFSR(R) tempering bitmasks
+    s , t : TGFSR(R) tempering bit shifts
+    u , d , l : additional Mersenne Twister tempering bit shifts/masks
+*/
+const MT_N: usize = 624;
+const MT_W: u32 = 32;
+const MT_M: usize = 397;
+const MT_F: u32 = 1812433253;
+const MT_R: u32 = 31;
+const MT_UMASK: u32 = 0xffffffffu32.wrapping_shl(MT_R);
+const MT_LMASK: u32 = !MT_UMASK; // LMASK is just the inverse of UMASK
+const MT_A: u32 = 0x9908b0df;
+const MT_U: u32 = 11;
+const MT_S: u32 = 7;
+const MT_T: u32 = 15;
+const MT_L: u32 = 18;
+const MT_B: u32 = 0x9d2c5680;
+const MT_C: u32 = 0xefc60000;
+
+pub struct MersenneTwister {
+    state: [u32; MT_N],
+    index: usize,
+}
+
+impl MersenneTwister {
+    #[allow(clippy::needless_range_loop)]
+    pub fn new(mut seed: u32) -> MersenneTwister {
+        let mut state = [0u32; MT_N];
+        state[0] = seed;
+        for i in 1..MT_N {
+            seed = MT_F
+                .wrapping_mul(seed ^ (seed >> (MT_W - 2)))
+                .wrapping_add(i as u32);
+            state[i] = seed;
+        }
+        MersenneTwister { state, index: 0 }
+    }
+
+    pub fn rand_u32(&mut self) -> u32 {
+        let k = self.index;
+        let j = (k + 1) % MT_N; // next index, wrapping
+        let m = (k + MT_M) % MT_N; // index m steps ahead, wrapping
+
+        let x = (self.state[k] & MT_UMASK) | (self.state[j] & MT_LMASK);
+        let mut xa = x >> 1;
+        if x & 1 == 1 {
+            xa ^= MT_A;
+        }
+
+        self.state[k] = self.state[m] ^ xa;
+        let x = self.state[k];
+
+        self.index = j; // advance index
+
+        // tempering
+        let mut y = x ^ (x >> MT_U);
+        y ^= (y << MT_S) & MT_B;
+        y ^= (y << MT_T) & MT_C;
+        y ^ (y >> MT_L)
+    }
+}
+
+pub fn challenge_twentyone() {
+    let mut mt = MersenneTwister::new(0);
+    for _ in 0..100000 {
+        println!("{}", mt.rand_u32())
+    }
+}
+
+pub fn challenge_twentytwo() {
+    let mut random_wait_time: u64 = rand::random_range(40..100);
+    thread::sleep(Duration::from_secs(random_wait_time));
+    let unix_timestamp = time::SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_secs();
+    let mut rng = MersenneTwister::new(unix_timestamp as u32);
+    random_wait_time = rand::random_range(40..100);
+    let random_output = rng.rand_u32();
+    println!("The output of the RNG is: {}", random_output);
+    println!("The seed was {}", unix_timestamp as u32);
+
+    let mut output = 0;
+    let mut attacker_unix_timestamp = time::SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_secs();
+    while output != random_output {
+        let mut rng = MersenneTwister::new(attacker_unix_timestamp as u32);
+        output = rng.rand_u32();
+        attacker_unix_timestamp -= 1;
+    }
+    assert_eq!(output, random_output);
+    println!(
+        "The seed was discovered to be: {}",
+        attacker_unix_timestamp as u32 + 1
+    );
+}
+
+pub fn undo_left_shift(input: u32, shift: u32, mask: u32) -> u32 {
+    if shift >= 16 {
+        println!("Chose easy path");
+        input ^ ((input << shift) & mask)
+    } else {
+        let mut output = input;
+        for _ in 0..32u32.div_ceil(shift) {
+            output = input ^ ((output << shift) & mask)
+        }
+        output
+    }
+}
+
+pub fn undo_right_shift(input: u32, shift: u32, mask: u32) -> u32 {
+    if shift >= 16 {
+        input ^ (input >> shift)
+    } else {
+        let mut output = input;
+        for _ in 0..32u32.div_ceil(shift) {
+            output = input ^ ((output >> shift) & mask)
+        }
+        output
+    }
+}
+
+pub fn untemper(input: u32) -> u32 {
+    let mut output = undo_right_shift(input, MT_L, 0xFFFFFFFF);
+    output = undo_left_shift(output, MT_T, MT_C);
+    output = undo_left_shift(output, MT_S, MT_B);
+    undo_right_shift(output, MT_U, 0xFFFFFFFF)
+}
+
+pub fn challenge_twentythree() {
+    #[allow(clippy::needless_range_loop)]
+    let mut twister = MersenneTwister::new(90);
+    let mut stolen_state = [0u32; MT_N];
+    for i in 0..624 {
+        stolen_state[i] = untemper(twister.rand_u32());
+    }
+    let mut cloned_twister = MersenneTwister {
+        index: 0,
+        state: stolen_state,
+    };
+    for _ in 0..10000 {
+        assert_eq!(twister.rand_u32(), cloned_twister.rand_u32());
+    }
 }
