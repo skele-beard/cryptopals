@@ -50,6 +50,7 @@ fn run_challenge(n: u32) {
         21 => sets::set3::challenge_twentyone(),
         22 => sets::set3::challenge_twentytwo(),
         23 => sets::set3::challenge_twentythree(),
+        24 => sets::set3::challenge_twentyfour(),
         _ => eprintln!("Challenge {} not found", n),
     }
 }

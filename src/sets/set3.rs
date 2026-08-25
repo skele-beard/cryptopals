@@ -7,7 +7,6 @@ use aes::cipher::KeyInit;
 use aes::{Aes128, cipher::generic_array::GenericArray};
 use rand;
 use std::thread;
-use std::time::SystemTime;
 use std::time::{Duration, UNIX_EPOCH};
 use std::{fs, time};
 
@@ -18,6 +17,7 @@ pub fn run_all() {
     challenge_twentyone();
     challenge_twentytwo();
     challenge_twentythree();
+    challenge_twentyfour();
 }
 
 pub fn challenge_seventeen_create_cookie(key: &[u8], iv: &[u8]) -> Vec<u8> {
@@ -361,4 +361,45 @@ pub fn challenge_twentythree() {
     for _ in 0..10000 {
         assert_eq!(twister.rand_u32(), cloned_twister.rand_u32());
     }
+}
+
+pub fn encrypt_mt_stream_cipher(plaintext: &[u8], seed: u16) -> Vec<u8> {
+    let mut prng = MersenneTwister::new(seed as u32);
+    let mut ciphertext = Vec::new();
+    for &byte in plaintext {
+        ciphertext.push(byte ^ prng.rand_u32() as u8);
+    }
+    ciphertext
+}
+
+pub fn decrypt_mt_stream_cipher(ciphertext: &[u8], seed: u16) -> Vec<u8> {
+    let mut prng = MersenneTwister::new(seed as u32);
+    let mut plaintext = Vec::new();
+    for &byte in ciphertext {
+        plaintext.push(byte ^ prng.rand_u32() as u8);
+    }
+    plaintext
+}
+
+pub fn recover_mt_stream_cipher_key(ciphertext: &[u8], known_plaintext: &[u8]) -> u16 {
+    for seed in 0..u16::MAX {
+        if decrypt_mt_stream_cipher(ciphertext, seed).ends_with(known_plaintext) {
+            return seed;
+        }
+    }
+    panic!("No seed could be recovered.");
+}
+
+pub fn challenge_twentyfour() {
+    let known_plaintext = b"AAAAAAAAAAAAAA";
+    let rand_num_bytes = (generate_sixteen_random_bytes()[0] % 16) as usize;
+
+    let mut plaintext: Vec<u8> = Vec::new();
+    plaintext.extend_from_slice(&generate_sixteen_random_bytes()[0..rand_num_bytes]);
+    plaintext.extend_from_slice(known_plaintext);
+
+    let seed = generate_sixteen_random_bytes()[0] as u16;
+    let ciphertext = encrypt_mt_stream_cipher(&plaintext, seed);
+    let recovered_seed = recover_mt_stream_cipher_key(&ciphertext, known_plaintext);
+    assert_eq!(seed, recovered_seed);
 }
